@@ -1,0 +1,46 @@
+const express = require('express');
+const cors = require('cors');
+const path = require('path');
+require('dotenv').config();
+
+
+const { sequelize } = require('./models');
+
+const app = express();
+const PORT = process.env.PORT || 8000;
+
+app.use(cors());
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+app.use('/api/auth', require('./routes/auth'));
+app.use('/api/startups', require('./routes/startups'));
+app.use('/api/categories', require('./routes/categories'));
+app.use('/api/post-votes', require('./routes/postVotes'));
+app.use('/api/posts', require('./routes/posts'));
+app.use('/api/founders', require('./routes/founders'));
+app.use('/api/admin', require('./routes/admin'));
+app.use('/api/services', require('./routes/services'));
+app.use('/api/submissions', require('./routes/submissions'));
+app.use('/api/comments', require('./routes/comments'));
+
+async function startServer() {
+  try {
+    await sequelize.authenticate({ logging: false });
+    console.log('✅ Connection to the database has been established successfully.');
+
+    await sequelize.sync({ alter: true, logging: false });
+    console.log('✅ Database synchronized.');
+
+    app.listen(PORT, () => {
+      console.log(`🚀 Server is running on port ${PORT}`);
+    });
+  } catch (error) {
+    console.error('❌ Unable to connect to the database:', error);
+    process.exit(1);
+  }
+}
+
+startServer();
+
+module.exports = app;
