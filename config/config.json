@@ -16,7 +16,7 @@
   "production": {
     "username": "postgres",
     "password": "welink@1234",
-    "database": "welink-pr",
+    "database": "welink_pr",
     "host": "postgres",
     "dialect": "postgres"
   }
