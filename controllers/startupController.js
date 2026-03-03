@@ -1,4 +1,4 @@
-const { Startup, StartupMetric, StartupPost, User, Category, Founder, StartupView } = require('../models');
+const { Startup, StartupMetric, StartupPost, User, Category, Founder, StartupView, PostVote, PostComment, CommentVote, sequelize } = require('../models');
 const { Op } = require('sequelize');
 const { uploadImageToS3, getSignedUrlForView, isS3Value } = require('../services/s3Service');
 const { v4: uuidv4 } = require('uuid');
@@ -450,6 +450,131 @@ exports.getMyStartup = async (req, res) => {
         res.json(signed);
     } catch (error) {
         console.error('Get My Startup Error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+};
+
+// ── Update Startup ────────────────────────────────────────────────────────────
+// NOTE: Posts keep their own status (APPROVED posts stay visible).
+// Only the startup profile goes to PENDING for re-approval.
+exports.updateStartup = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const owner_user_id = req.dbUser?.id;
+
+        const startup = await Startup.findByPk(id);
+        if (!startup) return res.status(404).json({ error: 'Startup not found' });
+
+        if (startup.owner_user_id !== owner_user_id) {
+            return res.status(403).json({ error: 'Unauthorized' });
+        }
+
+        const {
+            name, tagline, description, industry_id,
+            website_url, funding_stage, location, team_size, founded_year
+        } = req.body;
+
+        if (name !== undefined) startup.name = name;
+        if (tagline !== undefined) startup.tagline = tagline;
+        if (description !== undefined) startup.description = description;
+        if (industry_id !== undefined) startup.industry_id = industry_id;
+        if (website_url !== undefined) startup.website_url = website_url || null;
+        if (funding_stage !== undefined) startup.funding_stage = funding_stage || null;
+        if (location !== undefined) startup.location = location || null;
+        if (team_size !== undefined) startup.team_size = parseInt(team_size, 10) || null;
+        if (founded_year !== undefined) startup.founded_year = parseInt(founded_year, 10) || null;
+
+        // New logo upload
+        const logoFile = req.files?.logo?.[0];
+        if (logoFile) {
+            startup.logo_url = await uploadImageToS3(
+                logoFile.buffer, 'startup-logos', uuidv4(), logoFile.mimetype
+            );
+        }
+
+        // New incorporation cert upload
+        const certFile = req.files?.incorporation_certificate?.[0];
+        if (certFile) {
+            startup.incorporation_certificate_url = await uploadImageToS3(
+                certFile.buffer, 'incorporation-certs', uuidv4(), certFile.mimetype
+            );
+        }
+
+        // Reset to PENDING for re-approval. Posts are NOT affected.
+        startup.status = 'PENDING';
+        await startup.save();
+
+        const signed = await signStartupUrls(startup.toJSON());
+        res.json({ message: 'Startup updated successfully. Pending re-approval.', startup: signed });
+    } catch (error) {
+        console.error('Update Startup Error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+};
+
+// ── Delete Startup (owner only, full cascade) ─────────────────────────────────
+exports.deleteStartup = async (req, res) => {
+    const t = await sequelize.transaction();
+    try {
+        const { id } = req.params;
+        const owner_user_id = req.dbUser?.id;
+
+        const startup = await Startup.findByPk(id, { transaction: t });
+        if (!startup) {
+            await t.rollback();
+            return res.status(404).json({ error: 'Startup not found' });
+        }
+
+        // Only the owner can delete their own startup
+        if (startup.owner_user_id !== owner_user_id) {
+            await t.rollback();
+            return res.status(403).json({ error: 'Unauthorized' });
+        }
+
+        // 1. Get all post IDs for this startup
+        const posts = await StartupPost.findAll({
+            where: { startup_id: id },
+            attributes: ['id'],
+            transaction: t,
+        });
+        const postIds = posts.map(p => p.id);
+
+        // 2. Cascade delete post children
+        if (postIds.length > 0) {
+            await PostVote.destroy({ where: { post_id: postIds }, transaction: t });
+            const comments = await PostComment.findAll({
+                where: { post_id: postIds },
+                attributes: ['id'],
+                transaction: t,
+            });
+            const commentIds = comments.map(c => c.id);
+            if (commentIds.length > 0) {
+                await CommentVote.destroy({ where: { comment_id: commentIds }, transaction: t });
+            }
+            await PostComment.destroy({ where: { post_id: postIds }, transaction: t });
+            await StartupPost.destroy({ where: { startup_id: id }, transaction: t });
+        }
+
+        // 3. Delete founders, metrics, views
+        await Founder.destroy({ where: { startup_id: id }, transaction: t });
+        await StartupMetric.destroy({ where: { startup_id: id }, transaction: t });
+        await StartupView.destroy({ where: { startup_id: id }, transaction: t });
+
+        // 4. Downgrade owner back to USER role
+        const owner = await User.findByPk(owner_user_id, { transaction: t });
+        if (owner && owner.role === 'STARTUP') {
+            owner.role = 'USER';
+            await owner.save({ transaction: t });
+        }
+
+        // 5. Delete the startup itself
+        await startup.destroy({ transaction: t });
+        await t.commit();
+
+        res.json({ message: 'Startup deleted successfully' });
+    } catch (error) {
+        await t.rollback();
+        console.error('Delete Startup Error:', error);
         res.status(500).json({ error: 'Internal server error' });
     }
 };

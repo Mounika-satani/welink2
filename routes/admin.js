@@ -19,7 +19,6 @@ router.delete('/startup/:id', adminAuth, adminController.deleteStartup);
 
 router.get('/users', adminAuth, adminController.getAllUsers);
 
-// Admin comment moderation
 router.get('/comments', adminAuth, adminController.getAllComments);
 router.delete('/comments/:id', adminAuth, adminController.adminDeleteComment);
 router.patch('/comments/:id/hide', adminAuth, adminController.adminHideComment);

@@ -94,9 +94,18 @@ exports.rejectStartup = async (req, res) => {
 
 exports.getAllPendingStartups = async (req, res) => {
     try {
-        const startups = await Startup.findAll({ where: { status: 'DRAFT' } }); // Or 'UNDER_REVIEW'
+        const { Op } = require('sequelize');
+        const startups = await Startup.findAll({
+            where: { status: { [Op.in]: ['PENDING', 'DRAFT'] } },
+            include: [
+                { model: User, as: 'owner', attributes: ['id', 'email', 'role'] },
+                { model: Founder, as: 'founders' },
+            ],
+            order: [['updatedAt', 'DESC']],
+        });
         res.json(startups);
     } catch (error) {
+        console.error('Get Pending Startups Error:', error);
         res.status(500).json({ error: 'Server error' });
     }
 };

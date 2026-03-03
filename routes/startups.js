@@ -15,7 +15,7 @@ const logoUpload = multer({
 
 const startupUpload = multer({
     storage: multer.memoryStorage(),
-    limits: { fileSize: 10 * 1024 * 1024 }, // 10MB for cert
+    limits: { fileSize: 10 * 1024 * 1024 },
     fileFilter: (req, file, cb) => {
         const allowed = file.mimetype.startsWith('image/') || file.mimetype === 'application/pdf';
         if (allowed) cb(null, true);
@@ -31,5 +31,12 @@ router.get('/all', startupController.getAllStartups);
 router.get('/trending', startupController.getTrending);
 router.get('/my-startup', verifyToken, startupController.getMyStartup);
 router.get('/details/:id', verifyToken, startupController.getStartupById);
+
+router.put('/:id', verifyToken, startupUpload.fields([
+    { name: 'logo', maxCount: 1 },
+    { name: 'incorporation_certificate', maxCount: 1 }
+]), startupController.updateStartup);
+
+router.delete('/:id', verifyToken, startupController.deleteStartup);
 
 module.exports = router;

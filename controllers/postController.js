@@ -150,46 +150,90 @@ exports.getAllPosts = async (req, res) => {
 exports.updatePost = async (req, res) => {
     try {
         const { id } = req.params;
-        const { title, content, media_type, post_type, demo_link, external_link, comments_enabled } = req.body;
+        const { title, content, media_type, post_type, demo_link, external_link, comments_enabled, keep_media } = req.body;
 
         const post = await StartupPost.findByPk(id);
         if (!post) {
             return res.status(404).json({ error: 'Post not found' });
         }
 
-        let media_url = post.media_url;
+        // ── Resolve existing media URLs to keep ──────────────────────────────
+        // `keep_media` is a JSON-stringified array of existing S3 keys/URLs
+        // that the frontend wants to preserve. If omitted, all existing media
+        // is kept unless new files are uploaded that fully replace it.
+        let keptUrls = [];
+        if (keep_media !== undefined) {
+            try {
+                const parsed = JSON.parse(keep_media);
+                keptUrls = Array.isArray(parsed) ? parsed : [parsed];
+            } catch {
+                // keep_media sent as plain string (single URL)
+                if (keep_media) keptUrls = [keep_media];
+            }
+        } else {
+            // No keep_media field → preserve whatever is currently stored
+            if (post.media_url) {
+                try {
+                    const parsed = JSON.parse(post.media_url);
+                    keptUrls = Array.isArray(parsed) ? parsed : [post.media_url];
+                } catch {
+                    keptUrls = [post.media_url];
+                }
+            }
+        }
+
+        // ── Upload any new media files ────────────────────────────────────────
+        let newlyUploadedUrls = [];
+        let detectedMediaType = null;
+
+        if (req.files && req.files.media && req.files.media.length > 0) {
+            const mediaFiles = req.files.media;
+            newlyUploadedUrls = await Promise.all(
+                mediaFiles.map(async (mediaFile) => {
+                    const mediaId = uuidv4();
+                    return uploadImageToS3(
+                        mediaFile.buffer,
+                        'startup-posts',
+                        mediaId,
+                        mediaFile.mimetype
+                    );
+                })
+            );
+            // Auto-detect type from first new file when not explicitly provided
+            if (!media_type) {
+                detectedMediaType = mediaFiles[0].mimetype.startsWith('video') ? 'VIDEO' : 'IMAGE';
+            }
+        }
+
+        // ── Merge kept + newly uploaded URLs ─────────────────────────────────
+        const allUrls = [...keptUrls, ...newlyUploadedUrls];
+        let media_url;
+        if (allUrls.length === 0) {
+            media_url = null;
+        } else if (allUrls.length === 1) {
+            media_url = allUrls[0]; // plain string for backward compat
+        } else {
+            media_url = JSON.stringify(allUrls); // JSON array for multi-media
+        }
+
+        // ── Optional thumbnail upload ─────────────────────────────────────────
         let thumbnail_url = post.thumbnail_url;
-
-        // Handle new file uploads to S3 if provided
-        if (req.files) {
-            if (req.files.media?.[0]) {
-                const mediaFile = req.files.media[0];
-                const mediaId = uuidv4();
-                media_url = await uploadImageToS3(
-                    mediaFile.buffer,
-                    'startup-posts',
-                    mediaId,
-                    mediaFile.mimetype
-                );
-            }
-
-            if (req.files.thumbnail?.[0]) {
-                const thumbFile = req.files.thumbnail[0];
-                const thumbId = uuidv4();
-                thumbnail_url = await uploadImageToS3(
-                    thumbFile.buffer,
-                    'startup-post-thumbnails',
-                    thumbId,
-                    thumbFile.mimetype
-                );
-            }
+        if (req.files && req.files.thumbnail?.[0]) {
+            const thumbFile = req.files.thumbnail[0];
+            const thumbId = uuidv4();
+            thumbnail_url = await uploadImageToS3(
+                thumbFile.buffer,
+                'startup-post-thumbnails',
+                thumbId,
+                thumbFile.mimetype
+            );
         }
 
         await post.update({
             title: title !== undefined ? title : post.title,
             content: content !== undefined ? content : post.content,
             media_url,
-            media_type: media_type !== undefined ? media_type : post.media_type,
+            media_type: media_type !== undefined ? media_type : (detectedMediaType || post.media_type),
             thumbnail_url,
             post_type: post_type !== undefined ? post_type : post.post_type,
             demo_link: demo_link !== undefined ? demo_link : post.demo_link,
@@ -200,7 +244,9 @@ exports.updatePost = async (req, res) => {
             status: 'PENDING' // reset to pending for re-approval after edit
         });
 
-        res.json({ message: 'Post updated successfully', post });
+        // Re-fetch to return the latest snapshot
+        const updated = await StartupPost.findByPk(id);
+        res.json({ message: 'Post updated successfully', post: updated });
     } catch (error) {
         console.error('Update Post Error:', error);
         res.status(500).json({ error: 'Internal server error' });

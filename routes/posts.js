@@ -17,7 +17,7 @@ router.get('/', verifyOptionalToken, postController.getAllPosts);
 router.get('/startup/:startup_id', postController.getPostsByStartup);
 
 router.put('/:id', upload.fields([
-    { name: 'media', maxCount: 1 },
+    { name: 'media', maxCount: 10 },
     { name: 'thumbnail', maxCount: 1 }
 ]), postController.updatePost);
 

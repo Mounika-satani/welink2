@@ -117,3 +117,24 @@ exports.updateProfile = async (req, res) => {
         res.status(500).json({ error: 'Internal server error' });
     }
 };
+
+exports.deleteProfilePhoto = async (req, res) => {
+    try {
+        const { firebase_uid } = req.params;
+
+        if (req.user.uid !== firebase_uid) {
+            return res.status(403).json({ error: 'Unauthorized' });
+        }
+
+        const user = await User.findOne({ where: { firebase_uid } });
+        if (!user) return res.status(404).json({ error: 'User not found' });
+
+        user.photo_url = null;
+        await user.save();
+
+        res.json({ message: 'Profile photo removed successfully', user });
+    } catch (error) {
+        console.error('Delete Profile Photo Error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+};

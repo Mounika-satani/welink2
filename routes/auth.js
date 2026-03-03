@@ -22,5 +22,6 @@ router.post('/login', verifyToken, authController.login);
 router.get('/profile/:firebase_uid', verifyToken, authController.getProfile);
 
 router.put('/profile/:firebase_uid', verifyToken, upload.single('photo'), authController.updateProfile);
+router.delete('/profile/:firebase_uid/photo', verifyToken, authController.deleteProfilePhoto);
 
 module.exports = router;
