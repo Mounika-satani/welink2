@@ -25,6 +25,7 @@ const startupUpload = multer({
 
 router.post('/create', verifyToken, startupUpload.fields([
     { name: 'logo', maxCount: 1 },
+    { name: 'banner', maxCount: 1 },
     { name: 'incorporation_certificate', maxCount: 1 }
 ]), startupController.createStartup);
 router.get('/all', startupController.getAllStartups);
@@ -34,6 +35,7 @@ router.get('/details/:id', verifyToken, startupController.getStartupById);
 
 router.put('/:id', verifyToken, startupUpload.fields([
     { name: 'logo', maxCount: 1 },
+    { name: 'banner', maxCount: 1 },
     { name: 'incorporation_certificate', maxCount: 1 }
 ]), startupController.updateStartup);
 

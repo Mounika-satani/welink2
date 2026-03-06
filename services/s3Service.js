@@ -20,6 +20,7 @@ const isS3Value = (value) => {
     return (
         clean.startsWith('profile-pictures/') ||
         clean.startsWith('startup-logos/') ||
+        clean.startsWith('startup-banners/') ||
         clean.startsWith('founder-photos/') ||
         clean.startsWith('incorporation-certs/') ||
         clean.startsWith('categories/') ||
@@ -129,7 +130,7 @@ const uploadFileBufferToS3 = async (buffer, userId, contentType) => {
         }));
 
         console.log(`✅ Uploaded file to S3 (key: ${key})`);
-        return key; // ← SHORT key stored in DB
+        return key;
     } catch (error) {
         console.error("❌ Error uploading file to S3:", error.message);
         throw error;

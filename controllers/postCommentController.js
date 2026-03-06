@@ -1,4 +1,5 @@
 const { PostComment, CommentVote, User, StartupPost, Startup } = require('../models');
+const { getSignedUrlForView, isS3Value } = require('../services/s3Service');
 
 /* ─────────────────────────────────────────────
    Helper: vote counts + caller's vote for a comment
@@ -45,7 +46,14 @@ exports.getCommentsByPost = async (req, res) => {
             order: [['created_at', 'DESC']],
         });
 
-        const plain = comments.map(c => c.toJSON());
+        const plain = await Promise.all(comments.map(async (c) => {
+            const json = c.toJSON();
+            if (json.author && isS3Value(json.author.photo_url)) {
+                json.author.photo_url = await getSignedUrlForView(json.author.photo_url);
+            }
+            return json;
+        }));
+
         const withVotes = await attachVotes(plain, user_id);
 
         res.json(withVotes);
@@ -88,7 +96,12 @@ exports.addComment = async (req, res) => {
             include: [{ model: User, as: 'author', attributes: ['id', 'email', 'photo_url'] }],
         });
 
-        res.status(201).json({ ...full.toJSON(), upvotes: 0, downvotes: 0, userVote: null });
+        const json = full.toJSON();
+        if (json.author && isS3Value(json.author.photo_url)) {
+            json.author.photo_url = await getSignedUrlForView(json.author.photo_url);
+        }
+
+        res.status(201).json({ ...json, upvotes: 0, downvotes: 0, userVote: null });
     } catch (error) {
         console.error('AddComment Error:', error);
         res.status(500).json({ error: 'Internal server error' });
@@ -234,7 +247,14 @@ exports.getAllCommentsByPost = async (req, res) => {
             order: [['created_at', 'DESC']],
         });
 
-        const plain = comments.map(c => c.toJSON());
+        const plain = await Promise.all(comments.map(async (c) => {
+            const json = c.toJSON();
+            if (json.author && isS3Value(json.author.photo_url)) {
+                json.author.photo_url = await getSignedUrlForView(json.author.photo_url);
+            }
+            return json;
+        }));
+
         const withVotes = await attachVotes(plain, user_id);
 
         res.json(withVotes);

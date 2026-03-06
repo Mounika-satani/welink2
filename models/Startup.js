@@ -38,6 +38,9 @@ module.exports = (sequelize, DataTypes) => {
         logo_url: {
             type: DataTypes.TEXT,
         },
+        banner_url: {
+            type: DataTypes.TEXT,
+        },
         industry_id: {
             type: DataTypes.UUID,
         },

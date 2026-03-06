@@ -12,6 +12,9 @@ const signStartupUrls = async (s) => {
     if (s.logo_url && isS3Value(s.logo_url)) {
         s.logo_url = await getSignedUrlForView(s.logo_url);
     }
+    if (s.banner_url && isS3Value(s.banner_url)) {
+        s.banner_url = await getSignedUrlForView(s.banner_url);
+    }
     if (s.incorporation_certificate_url && isS3Value(s.incorporation_certificate_url)) {
         s.incorporation_certificate_url = await getSignedUrlForView(s.incorporation_certificate_url);
     }
@@ -87,6 +90,19 @@ exports.createStartup = async (req, res) => {
             );
         }
 
+        // Upload banner to S3 if provided
+        let banner_url = null;
+        const bannerFile = req.files?.banner?.[0];
+        if (bannerFile) {
+            const bannerId = uuidv4();
+            banner_url = await uploadImageToS3(
+                bannerFile.buffer,
+                'startup-banners',
+                bannerId,
+                bannerFile.mimetype
+            );
+        }
+
         // Upload incorporation certificate to S3 if provided
         let incorporation_certificate_url_final = incorporation_certificate_url || null;
         const certFile = req.files?.incorporation_certificate?.[0];
@@ -111,6 +127,7 @@ exports.createStartup = async (req, res) => {
             team_size: team_size ? parseInt(team_size, 10) : null,
             founded_year: req.body.founded_year ? parseInt(req.body.founded_year, 10) : null,
             logo_url,
+            banner_url,
             owner_user_id,
             incorporation_certificate_url: incorporation_certificate_url_final,
             status: 'DRAFT'
@@ -489,6 +506,14 @@ exports.updateStartup = async (req, res) => {
         if (logoFile) {
             startup.logo_url = await uploadImageToS3(
                 logoFile.buffer, 'startup-logos', uuidv4(), logoFile.mimetype
+            );
+        }
+
+        // New banner upload
+        const bannerFile = req.files?.banner?.[0];
+        if (bannerFile) {
+            startup.banner_url = await uploadImageToS3(
+                bannerFile.buffer, 'startup-banners', uuidv4(), bannerFile.mimetype
             );
         }
 
