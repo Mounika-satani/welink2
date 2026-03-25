@@ -51,7 +51,7 @@ exports.getAllCategories = async (req, res) => {
 
 exports.createCategory = async (req, res) => {
     try {
-        const { name, description } = req.body;
+        const { name, description, type } = req.body;
         let imageUrl = req.body.imageUrl || req.body.image_url;
 
         if (!name) {
@@ -72,7 +72,8 @@ exports.createCategory = async (req, res) => {
         const category = await Category.create({
             name,
             imageUrl,
-            description
+            description,
+            type: type || 'INDUSTRY'
         });
         res.status(201).json(category);
     } catch (error) {
@@ -84,7 +85,7 @@ exports.createCategory = async (req, res) => {
 exports.updateCategory = async (req, res) => {
     try {
         const { id } = req.params;
-        const { name, description } = req.body;
+        const { name, description, type } = req.body;
 
         const category = await Category.findByPk(id);
         if (!category) {
@@ -107,7 +108,8 @@ exports.updateCategory = async (req, res) => {
         await category.update({
             name: name || category.name,
             description: description !== undefined ? description : category.description,
-            imageUrl
+            imageUrl,
+            type: type || category.type
         });
 
         res.json({ message: 'Category updated successfully', category });

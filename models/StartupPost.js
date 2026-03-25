@@ -6,6 +6,8 @@ module.exports = (sequelize, DataTypes) => {
             StartupPost.belongsTo(models.Startup, { foreignKey: 'startup_id', as: 'startup' });
             StartupPost.hasMany(models.PostVote, { foreignKey: 'post_id', as: 'postVotes' });
             StartupPost.hasMany(models.PostComment, { foreignKey: 'post_id', as: 'comments' });
+            StartupPost.hasOne(models.PostMetric, { foreignKey: 'post_id', as: 'metrics' });
+            StartupPost.hasMany(models.PostView, { foreignKey: 'post_id', as: 'views' });
         }
     }
 

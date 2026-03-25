@@ -4,6 +4,12 @@ module.exports = (sequelize, DataTypes) => {
     class Category extends Model {
         static associate(models) {
             Category.hasMany(models.Startup, { foreignKey: 'industry_id', as: 'startups' });
+            Category.belongsToMany(models.Startup, {
+                through: models.StartupIndustry,
+                foreignKey: 'category_id',
+                otherKey: 'startup_id',
+                as: 'industries_startups'
+            });
         }
     }
 
@@ -15,7 +21,6 @@ module.exports = (sequelize, DataTypes) => {
         },
         name: {
             type: DataTypes.STRING,
-            unique: true,
             allowNull: false,
         },
         imageUrl: {
@@ -31,6 +36,12 @@ module.exports = (sequelize, DataTypes) => {
         is_active: {
             type: DataTypes.BOOLEAN,
             defaultValue: true,
+        },
+        type: {
+            type: DataTypes.STRING,
+            allowNull: false,
+            defaultValue: 'INDUSTRY',
+            comment: 'Type of category: INDUSTRY, BANNER, ADVERTISEMENT'
         },
     }, {
         sequelize,

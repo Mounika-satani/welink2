@@ -1,5 +1,20 @@
-const { PostComment, CommentVote, User, StartupPost, Startup } = require('../models');
+const { PostComment, CommentVote, User, StartupPost, Startup, Founder } = require('../models');
 const { getSignedUrlForView, isS3Value } = require('../services/s3Service');
+
+const authorInclude = {
+    model: User,
+    as: 'author',
+    attributes: ['id', 'email', 'photo_url', 'role'],
+    include: [{
+        model: Startup,
+        as: 'startup',
+        include: [{
+            model: Founder,
+            as: 'founders',
+            attributes: ['name']
+        }]
+    }]
+};
 
 /* ─────────────────────────────────────────────
    Helper: vote counts + caller's vote for a comment
@@ -38,11 +53,7 @@ exports.getCommentsByPost = async (req, res) => {
 
         const comments = await PostComment.findAll({
             where: { post_id, status: 'ACTIVE' },
-            include: [{
-                model: User,
-                as: 'author',
-                attributes: ['id', 'email', 'photo_url'],
-            }],
+            include: [authorInclude],
             order: [['created_at', 'DESC']],
         });
 
@@ -70,7 +81,7 @@ exports.getCommentsByPost = async (req, res) => {
 ───────────────────────────────────────────── */
 exports.addComment = async (req, res) => {
     try {
-        const { post_id, content } = req.body;
+        const { post_id, content, parent_id } = req.body;
         const user_id = req.dbUser?.id;
 
         if (!post_id || !content?.trim()) {
@@ -88,12 +99,13 @@ exports.addComment = async (req, res) => {
         const comment = await PostComment.create({
             post_id,
             user_id,
+            parent_id: parent_id || null,
             content: content.trim(),
             status: 'ACTIVE',
         });
 
         const full = await PostComment.findByPk(comment.id, {
-            include: [{ model: User, as: 'author', attributes: ['id', 'email', 'photo_url'] }],
+            include: [authorInclude],
         });
 
         const json = full.toJSON();
@@ -143,6 +155,37 @@ exports.castCommentVote = async (req, res) => {
         res.status(201).json({ message: 'Vote cast', ...(await getCommentVoteCounts(comment_id, user_id)) });
     } catch (error) {
         console.error('CastCommentVote Error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+};
+
+/* ─────────────────────────────────────────────
+   PUT /api/comments/:id
+   Update comment content (Author only)
+   Requires verifyToken
+───────────────────────────────────────────── */
+exports.updateComment = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { content } = req.body;
+        const user_id = req.dbUser?.id;
+
+        if (!user_id) return res.status(401).json({ error: 'Authentication required' });
+        if (!content?.trim()) return res.status(400).json({ error: 'Content is required' });
+
+        const comment = await PostComment.findByPk(id);
+        if (!comment) return res.status(404).json({ error: 'Comment not found' });
+
+        if (comment.user_id !== user_id) {
+            return res.status(403).json({ error: 'Forbidden: Only the author can update this comment' });
+        }
+
+        comment.content = content.trim();
+        await comment.save();
+
+        res.json({ message: 'Comment updated successfully', comment });
+    } catch (error) {
+        console.error('UpdateComment Error:', error);
         res.status(500).json({ error: 'Internal server error' });
     }
 };
@@ -239,11 +282,7 @@ exports.getAllCommentsByPost = async (req, res) => {
 
         const comments = await PostComment.findAll({
             where: { post_id }, // No status filter — includes HIDDEN
-            include: [{
-                model: User,
-                as: 'author',
-                attributes: ['id', 'email', 'photo_url'],
-            }],
+            include: [authorInclude],
             order: [['created_at', 'DESC']],
         });
 

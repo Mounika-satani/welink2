@@ -6,6 +6,8 @@ module.exports = (sequelize, DataTypes) => {
             PostComment.belongsTo(models.StartupPost, { foreignKey: 'post_id', as: 'post' });
             PostComment.belongsTo(models.User, { foreignKey: 'user_id', as: 'author' });
             PostComment.hasMany(models.CommentVote, { foreignKey: 'comment_id', as: 'votes' });
+            PostComment.hasMany(models.PostComment, { foreignKey: 'parent_id', as: 'replies' });
+            PostComment.belongsTo(models.PostComment, { foreignKey: 'parent_id', as: 'parent' });
         }
     }
 
@@ -23,6 +25,14 @@ module.exports = (sequelize, DataTypes) => {
             type: DataTypes.UUID,
             allowNull: false,
         },
+        parent_id: {
+            type: DataTypes.UUID,
+            allowNull: true,
+            references: {
+                model: 'post_comments',
+                key: 'id'
+            }
+        },
         content: {
             type: DataTypes.TEXT,
             allowNull: false,
@@ -37,6 +47,29 @@ module.exports = (sequelize, DataTypes) => {
         modelName: 'PostComment',
         tableName: 'post_comments',
         underscored: true,
+        hooks: {
+            afterCreate: async (comment) => {
+                const { PostVote } = sequelize.models;
+                if (PostVote.recalculateAll) {
+                    await PostVote.recalculateAll(sequelize, comment.post_id);
+                }
+            },
+            afterDestroy: async (comment) => {
+                const { PostVote } = sequelize.models;
+                if (PostVote.recalculateAll) {
+                    await PostVote.recalculateAll(sequelize, comment.post_id);
+                }
+            },
+            afterUpdate: async (comment) => {
+                // If status changed (e.g. moderated)
+                if (comment.changed('status')) {
+                    const { PostVote } = sequelize.models;
+                    if (PostVote.recalculateAll) {
+                        await PostVote.recalculateAll(sequelize, comment.post_id);
+                    }
+                }
+            }
+        }
     });
 
     return PostComment;

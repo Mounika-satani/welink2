@@ -4,7 +4,13 @@ module.exports = (sequelize, DataTypes) => {
     class Startup extends Model {
         static associate(models) {
             Startup.belongsTo(models.User, { foreignKey: 'owner_user_id', as: 'owner' });
-            Startup.belongsTo(models.Category, { foreignKey: 'industry_id', as: 'industry' });
+            Startup.belongsTo(models.Category, { foreignKey: 'industry_id', as: 'industry' }); // Keeping for legacy/primary industry
+            Startup.belongsToMany(models.Category, {
+                through: models.StartupIndustry,
+                foreignKey: 'startup_id',
+                otherKey: 'category_id',
+                as: 'industries'
+            });
             Startup.hasMany(models.Founder, { foreignKey: 'startup_id', as: 'founders' });
             Startup.hasMany(models.StartupPost, { foreignKey: 'startup_id', as: 'posts' });
             Startup.hasOne(models.StartupMetric, { foreignKey: 'startup_id', as: 'metrics' });
@@ -81,6 +87,19 @@ module.exports = (sequelize, DataTypes) => {
         approved_at: {
             type: DataTypes.DATE,
         },
+        linkedin_url: {
+            type: DataTypes.TEXT,
+        },
+        twitter_url: {
+            type: DataTypes.TEXT,
+        },
+        instagram_url: {
+            type: DataTypes.TEXT,
+        },
+        facebook_url: {
+            type: DataTypes.TEXT,
+        },
+
     }, {
         sequelize,
         modelName: 'Startup',

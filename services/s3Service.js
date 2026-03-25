@@ -14,6 +14,27 @@ const s3Client = new S3Client({
     responseChecksumValidation: "WHEN_REQUIRED",
 });
 
+// ── Presigned URL In-Memory Cache ─────────────────────────────────────────────
+// S3 presigned URLs are valid for 24h (86400s). We cache them for 23h (82800s)
+// to safely reuse across requests without worrying about expiry edge cases.
+const CACHE_TTL_MS = 82800 * 1000; // 23 hours
+const urlCache = new Map(); // key: S3 key string, value: { url, expiresAt }
+
+const getCachedUrl = (key) => {
+    const entry = urlCache.get(key);
+    if (!entry) return null;
+    if (Date.now() >= entry.expiresAt) {
+        urlCache.delete(key); // evict stale entry
+        return null;
+    }
+    return entry.url;
+};
+
+const setCachedUrl = (key, url) => {
+    urlCache.set(key, { url, expiresAt: Date.now() + CACHE_TTL_MS });
+};
+// ─────────────────────────────────────────────────────────────────────────────
+
 const isS3Value = (value) => {
     if (!value) return false;
     const clean = value.replace(/[\r\n\t\0\x0B\x0C]/g, '').trim();
@@ -92,12 +113,19 @@ const getSignedUrlForView = async (s3Value) => {
         const key = extractS3Key(s3Value);
         if (!key) return null;
 
+        // ── Cache hit: return immediately without calling AWS ──────────────
+        const cached = getCachedUrl(key);
+        if (cached) return cached;
+        // ──────────────────────────────────────────────────────────────────
+
         const command = new GetObjectCommand({
             Bucket: process.env.S3_BUCKET_NAME,
             Key: key,
         });
 
-        return await getSignedUrl(s3Client, command, { expiresIn: 86400 }); // 24h
+        const url = await getSignedUrl(s3Client, command, { expiresIn: 86400 }); // 24h
+        setCachedUrl(key, url); // store for next 23h
+        return url;
     } catch (error) {
         console.error(`❌ getSignedUrlForView failed for key="${extractS3Key(s3Value)}" — ${error.name}: ${error.message}`);
         console.error(`   Bucket: ${process.env.S3_BUCKET_NAME} | Region: ${process.env.S3_REGION}`);

@@ -1,6 +1,7 @@
 const { Admin, Startup, User, StartupPost, PostVote, PostComment, CommentVote, Founder, StartupMetric, StartupView, sequelize } = require('../models');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const { sendStartupApprovedEmail, sendStartupRejectedEmail, sendPostApprovedEmail, sendPostRejectedEmail } = require('../services/emailService');
 
 exports.adminLogin = async (req, res) => {
     const { email, password } = req.body;
@@ -52,6 +53,11 @@ exports.approveStartup = async (req, res) => {
             console.log(`✅ Promoted user ${owner.email} to STARTUP role`);
         }
 
+        // 📧 Email: Startup Approved
+        if (owner?.email) {
+            sendStartupApprovedEmail({ to: owner.email, startupName: startup.name });
+        }
+
         res.json({
             message: 'Startup approved successfully',
             startup,
@@ -66,6 +72,7 @@ exports.approveStartup = async (req, res) => {
 exports.rejectStartup = async (req, res) => {
     try {
         const { id } = req.params;
+        const { reason } = req.body; // optional rejection reason from admin
         const startup = await Startup.findByPk(id);
 
         if (!startup) return res.status(404).json({ error: 'Startup not found' });
@@ -79,6 +86,11 @@ exports.rejectStartup = async (req, res) => {
             owner.role = 'USER';
             await owner.save();
             console.log(`↩️ Demoted user ${owner.email} back to USER role`);
+        }
+
+        // 📧 Email: Startup Rejected
+        if (owner?.email) {
+            sendStartupRejectedEmail({ to: owner.email, startupName: startup.name, reason });
         }
 
         res.json({
@@ -136,12 +148,20 @@ exports.getAllPendingPosts = async (req, res) => {
 exports.approvePost = async (req, res) => {
     try {
         const { id } = req.params;
-        const post = await StartupPost.findByPk(id);
+        const post = await StartupPost.findByPk(id, {
+            include: [{ model: Startup, as: 'startup', include: [{ model: User, as: 'owner', attributes: ['email'] }] }]
+        });
         if (!post) return res.status(404).json({ error: 'Post not found' });
 
         post.status = 'APPROVED';
         post.approved_at = new Date();
         await post.save();
+
+        // 📧 Email: Post Approved
+        const ownerEmail = post.startup?.owner?.email;
+        if (ownerEmail) {
+            sendPostApprovedEmail({ to: ownerEmail, startupName: post.startup.name, postTitle: post.title });
+        }
 
         res.json({ message: 'Post approved successfully', post });
     } catch (error) {
@@ -153,11 +173,20 @@ exports.approvePost = async (req, res) => {
 exports.rejectPost = async (req, res) => {
     try {
         const { id } = req.params;
-        const post = await StartupPost.findByPk(id);
+        const { reason } = req.body; // optional rejection reason from admin
+        const post = await StartupPost.findByPk(id, {
+            include: [{ model: Startup, as: 'startup', include: [{ model: User, as: 'owner', attributes: ['email'] }] }]
+        });
         if (!post) return res.status(404).json({ error: 'Post not found' });
 
         post.status = 'REJECTED';
         await post.save();
+
+        // 📧 Email: Post Rejected
+        const ownerEmail = post.startup?.owner?.email;
+        if (ownerEmail) {
+            sendPostRejectedEmail({ to: ownerEmail, startupName: post.startup?.name, postTitle: post.title, reason });
+        }
 
         res.json({ message: 'Post rejected', post });
     } catch (error) {

@@ -13,8 +13,10 @@ router.post('/add', upload.fields([
 
 
 router.get('/', verifyOptionalToken, postController.getAllPosts);
-
+router.get('/trending', verifyOptionalToken, postController.getTrendingPosts);
 router.get('/startup/:startup_id', postController.getPostsByStartup);
+
+router.post('/:id/view', verifyOptionalToken, postController.trackPostView);
 
 router.put('/:id', upload.fields([
     { name: 'media', maxCount: 10 },

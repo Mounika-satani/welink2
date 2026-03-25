@@ -14,6 +14,8 @@ router.post('/', verifyToken, ctrl.addComment);
 
 router.post('/:id/vote', verifyToken, ctrl.castCommentVote);
 
+router.put('/:id', verifyToken, ctrl.updateComment);
+
 router.delete('/:id', verifyToken, ctrl.deleteComment);
 
 

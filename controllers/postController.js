@@ -1,9 +1,10 @@
-const { StartupPost, Startup } = require('../models');
+const { StartupPost, Startup, PostComment, PostMetric, PostView, PostVote, User, sequelize } = require('../models');
+const { Op } = require('sequelize');
 const { uploadImageToS3, getSignedUrlForView, isS3Value } = require('../services/s3Service');
+const { sendPostSubmittedEmail } = require('../services/emailService');
 const { v4: uuidv4 } = require('uuid');
 
 const signPostUrls = async (post) => {
-    // media_url can be a plain string OR a JSON array of strings
     if (post.media_url) {
         try {
             const parsed = JSON.parse(post.media_url);
@@ -11,12 +12,11 @@ const signPostUrls = async (post) => {
                 post.media_urls = await Promise.all(
                     parsed.map(u => isS3Value(u) ? getSignedUrlForView(u) : u)
                 );
-                post.media_url = post.media_urls[0]; // keep first as primary
+                post.media_url = post.media_urls[0];
             } else {
                 throw new Error('not array');
             }
         } catch {
-            // plain string (legacy single upload)
             if (isS3Value(post.media_url)) {
                 post.media_url = await getSignedUrlForView(post.media_url);
             }
@@ -42,12 +42,9 @@ exports.addPost = async (req, res) => {
 
         let media_url = req.body.media_url || null;
         let thumbnail_url = req.body.thumbnail_url || null;
-        // auto-detect media_type from first file if not provided
         let media_type_resolved = media_type;
 
-        // Handle file uploads to S3
         if (req.files) {
-            // Support multiple media files (up to 10)
             if (req.files.media && req.files.media.length > 0) {
                 const mediaFiles = req.files.media;
                 const uploadedUrls = await Promise.all(
@@ -61,18 +58,15 @@ exports.addPost = async (req, res) => {
                         );
                     })
                 );
-                // Store as JSON array; single file stored as plain string for compat
                 media_url = uploadedUrls.length === 1
                     ? uploadedUrls[0]
                     : JSON.stringify(uploadedUrls);
 
-                // auto-detect type from first file
                 if (!media_type_resolved) {
                     media_type_resolved = mediaFiles[0].mimetype.startsWith('video') ? 'VIDEO' : 'IMAGE';
                 }
             }
 
-            // Optional thumbnail (for video)
             if (req.files.thumbnail?.[0]) {
                 const thumbFile = req.files.thumbnail[0];
                 const thumbId = uuidv4();
@@ -99,6 +93,21 @@ exports.addPost = async (req, res) => {
             status: 'PENDING'
         });
 
+        await PostMetric.create({ post_id: post.id });
+
+        // 📧 Email: Post Submitted — fetch startup owner's email
+        try {
+            const startup = await Startup.findByPk(startup_id, {
+                include: [{ model: User, as: 'owner', attributes: ['email'] }]
+            });
+            const ownerEmail = startup?.owner?.email;
+            if (ownerEmail) {
+                sendPostSubmittedEmail({ to: ownerEmail, startupName: startup.name, postTitle: title });
+            }
+        } catch (emailErr) {
+            console.error('Post email lookup failed:', emailErr.message);
+        }
+
         res.status(201).json(post);
     } catch (error) {
         console.error('Add Post Error:', error);
@@ -111,9 +120,25 @@ exports.getPostsByStartup = async (req, res) => {
         const { startup_id } = req.params;
         const posts = await StartupPost.findAll({
             where: { startup_id, status: 'APPROVED' },
+            include: [{ model: PostMetric, as: 'metrics' }],
             order: [['created_at', 'DESC']]
         });
-        const signedPosts = await Promise.all(posts.map(p => signPostUrls(p.toJSON())));
+        const postsJson = posts.map(p => p.toJSON());
+        const signedPosts = await Promise.all(postsJson.map(async (p) => {
+            p.comments_count = await PostComment.count({ where: { post_id: p.id, status: 'ACTIVE' } });
+
+            // Check for user vote if authenticated
+            if (req.dbUser) {
+                const userVote = await PostVote.findOne({
+                    where: { post_id: p.id, user_id: req.dbUser.id }
+                });
+                p.userVote = userVote ? userVote.vote_type : 0;
+            } else {
+                p.userVote = 0;
+            }
+
+            return await signPostUrls(p);
+        }));
         res.json(signedPosts);
     } catch (error) {
         console.error('Get Posts Error:', error);
@@ -124,8 +149,6 @@ exports.getPostsByStartup = async (req, res) => {
 exports.getAllPosts = async (req, res) => {
     try {
         let whereClause = { status: 'APPROVED' };
-
-        // If user is authenticated, find their startup and exclude its posts
         if (req.dbUser) {
             const userStartup = await Startup.findOne({ where: { owner_user_id: req.dbUser.id } });
             if (userStartup) {
@@ -136,10 +159,27 @@ exports.getAllPosts = async (req, res) => {
 
         const posts = await StartupPost.findAll({
             where: whereClause,
-            include: [{ model: Startup, as: 'startup', attributes: ['name', 'logo_url', 'tagline', 'owner_user_id'] }],
+            include: [
+                { model: Startup, as: 'startup', attributes: ['name', 'logo_url', 'tagline', 'owner_user_id'] },
+                { model: PostMetric, as: 'metrics' }
+            ],
             order: [['created_at', 'DESC']]
         });
-        const signedPosts = await Promise.all(posts.map(p => signPostUrls(p.toJSON())));
+        const postsJson = posts.map(p => p.toJSON());
+        const signedPosts = await Promise.all(postsJson.map(async (p) => {
+            p.comments_count = await PostComment.count({ where: { post_id: p.id, status: 'ACTIVE' } });
+
+            if (req.dbUser) {
+                const userVote = await PostVote.findOne({
+                    where: { post_id: p.id, user_id: req.dbUser.id }
+                });
+                p.userVote = userVote ? userVote.vote_type : 0;
+            } else {
+                p.userVote = 0;
+            }
+
+            return await signPostUrls(p);
+        }));
         res.json(signedPosts);
     } catch (error) {
         console.error('Get All Posts Error:', error);
@@ -157,21 +197,15 @@ exports.updatePost = async (req, res) => {
             return res.status(404).json({ error: 'Post not found' });
         }
 
-        // ── Resolve existing media URLs to keep ──────────────────────────────
-        // `keep_media` is a JSON-stringified array of existing S3 keys/URLs
-        // that the frontend wants to preserve. If omitted, all existing media
-        // is kept unless new files are uploaded that fully replace it.
         let keptUrls = [];
         if (keep_media !== undefined) {
             try {
                 const parsed = JSON.parse(keep_media);
                 keptUrls = Array.isArray(parsed) ? parsed : [parsed];
             } catch {
-                // keep_media sent as plain string (single URL)
                 if (keep_media) keptUrls = [keep_media];
             }
         } else {
-            // No keep_media field → preserve whatever is currently stored
             if (post.media_url) {
                 try {
                     const parsed = JSON.parse(post.media_url);
@@ -182,7 +216,6 @@ exports.updatePost = async (req, res) => {
             }
         }
 
-        // ── Upload any new media files ────────────────────────────────────────
         let newlyUploadedUrls = [];
         let detectedMediaType = null;
 
@@ -199,24 +232,21 @@ exports.updatePost = async (req, res) => {
                     );
                 })
             );
-            // Auto-detect type from first new file when not explicitly provided
             if (!media_type) {
                 detectedMediaType = mediaFiles[0].mimetype.startsWith('video') ? 'VIDEO' : 'IMAGE';
             }
         }
 
-        // ── Merge kept + newly uploaded URLs ─────────────────────────────────
         const allUrls = [...keptUrls, ...newlyUploadedUrls];
         let media_url;
         if (allUrls.length === 0) {
             media_url = null;
         } else if (allUrls.length === 1) {
-            media_url = allUrls[0]; // plain string for backward compat
+            media_url = allUrls[0];
         } else {
-            media_url = JSON.stringify(allUrls); // JSON array for multi-media
+            media_url = JSON.stringify(allUrls);
         }
 
-        // ── Optional thumbnail upload ─────────────────────────────────────────
         let thumbnail_url = post.thumbnail_url;
         if (req.files && req.files.thumbnail?.[0]) {
             const thumbFile = req.files.thumbnail[0];
@@ -267,6 +297,79 @@ exports.deletePost = async (req, res) => {
         res.json({ message: 'Post deleted successfully' });
     } catch (error) {
         console.error('Delete Post Error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+};
+exports.getTrendingPosts = async (req, res) => {
+    try {
+        const limit = parseInt(req.query.limit, 10) || 10;
+        const posts = await StartupPost.findAll({
+            where: { status: 'APPROVED' },
+            include: [
+                { model: Startup, as: 'startup', attributes: ['name', 'logo_url', 'tagline'] },
+                { model: PostMetric, as: 'metrics' }
+            ],
+            order: [[{ model: PostMetric, as: 'metrics' }, 'trending_score', 'DESC']],
+            limit
+        });
+
+        const postsJson = posts.map(p => p.toJSON());
+        const signedPosts = await Promise.all(postsJson.map(async (p) => {
+            p.comments_count = await PostComment.count({ where: { post_id: p.id, status: 'ACTIVE' } });
+            if (req.dbUser) {
+                const userVote = await PostVote.findOne({
+                    where: { post_id: p.id, user_id: req.dbUser.id }
+                });
+                p.userVote = userVote ? userVote.vote_type : 0;
+            } else {
+                p.userVote = 0;
+            }
+            return await signPostUrls(p);
+        }));
+
+        res.json(signedPosts);
+    } catch (error) {
+        console.error('Get Trending Posts Error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+};
+
+exports.trackPostView = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const user_id = req.dbUser?.id || null;
+        const ip = req.headers['x-forwarded-for']?.split(',')[0]?.trim()
+            || req.socket?.remoteAddress
+            || null;
+
+        const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+
+        const whereClause = {
+            post_id: id,
+            created_at: { [Op.gte]: oneHourAgo },
+            [Op.or]: [
+                ...(user_id ? [{ user_id }] : []),
+                ...(ip ? [{ ip_address: ip }] : []),
+            ],
+        };
+
+        const recentView = await PostView.findOne({ where: whereClause });
+
+        if (!recentView) {
+            await PostView.create({
+                post_id: id,
+                user_id,
+                ip_address: ip,
+                user_agent: req.headers['user-agent'] || null,
+            });
+            // Hook in PostView handles incrementing total_views
+            // We can also trigger a background recalculation here if we want scores to reflect views immediately
+            PostVote.recalculateIndividualPostMetrics(id);
+        }
+
+        res.status(200).json({ status: 'tracked' });
+    } catch (error) {
+        console.error('Track Post View Error:', error);
         res.status(500).json({ error: 'Internal server error' });
     }
 };

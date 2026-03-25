@@ -1,6 +1,7 @@
 const { Startup, StartupMetric, StartupPost, User, Category, Founder, StartupView, PostVote, PostComment, CommentVote, sequelize } = require('../models');
 const { Op } = require('sequelize');
 const { uploadImageToS3, getSignedUrlForView, isS3Value } = require('../services/s3Service');
+const { sendStartupSubmittedEmail } = require('../services/emailService');
 const { v4: uuidv4 } = require('uuid');
 
 /**
@@ -17,6 +18,15 @@ const signStartupUrls = async (s) => {
     }
     if (s.incorporation_certificate_url && isS3Value(s.incorporation_certificate_url)) {
         s.incorporation_certificate_url = await getSignedUrlForView(s.incorporation_certificate_url);
+    }
+
+    // 1b. Sign Industry URLs
+    if (Array.isArray(s.industries)) {
+        await Promise.all(s.industries.map(async (ind) => {
+            if (ind.image_url && isS3Value(ind.image_url)) {
+                ind.image_url = await getSignedUrlForView(ind.image_url);
+            }
+        }));
     }
 
     // 2. Sign Founder photos
@@ -62,10 +72,13 @@ const signStartupUrls = async (s) => {
 exports.createStartup = async (req, res) => {
     try {
         const {
-            name, tagline, description, industry_id,
+            name, tagline, description, industry_id, industry_ids,
             website_url, funding_stage, location, team_size,
-            incorporation_certificate_url
+            incorporation_certificate_url,
+            linkedin_url, twitter_url, instagram_url, facebook_url
         } = req.body;
+
+        console.log('Create Startup Request Body:', req.body);
 
         const owner_user_id = req.dbUser ? req.dbUser.id : req.body.owner_user_id;
 
@@ -130,10 +143,32 @@ exports.createStartup = async (req, res) => {
             banner_url,
             owner_user_id,
             incorporation_certificate_url: incorporation_certificate_url_final,
+            linkedin_url: linkedin_url || null,
+            twitter_url: twitter_url || null,
+            instagram_url: instagram_url || null,
+            facebook_url: facebook_url || null,
             status: 'DRAFT'
         });
 
         await StartupMetric.create({ startup_id: startup.id });
+
+        // Handle multiple industries
+        let idsToSet = [];
+        if (Array.isArray(industry_ids)) {
+            idsToSet = industry_ids;
+        } else if (industry_id) {
+            idsToSet = [industry_id];
+        }
+
+        if (idsToSet.length > 0) {
+            await startup.setIndustries(idsToSet);
+        }
+
+        // 📧 Email: Startup Submitted
+        const ownerUser = req.dbUser;
+        if (ownerUser?.email) {
+            sendStartupSubmittedEmail({ to: ownerUser.email, startupName: startup.name });
+        }
 
         res.status(201).json(startup);
     } catch (error) {
@@ -152,22 +187,37 @@ exports.getAllStartups = async (req, res) => {
 
         const whereClause = { status: 'APPROVED' };
 
-        // Search filter
+        // Search filter: Check name, tagline, description, OR any of the industry names
         if (search) {
             whereClause[Op.or] = [
                 { name: { [Op.iLike]: `%${search}%` } },
                 { tagline: { [Op.iLike]: `%${search}%` } },
-                { description: { [Op.iLike]: `%${search}%` } }
+                { description: { [Op.iLike]: `%${search}%` } },
+                { '$industry.name$': { [Op.iLike]: `%${search}%` } },
+                { '$industries.name$': { [Op.iLike]: `%${search}%` } }
             ];
         }
 
-        // Industry filter
+        // Industry filter: check both primary and many-to-many industries
+        if (category !== "All") {
+            whereClause[Op.or] = [
+                ...(whereClause[Op.or] || []), // Merge with existing search filters if any
+                { '$industry.name$': category },
+                { '$industries.name$': category }
+            ];
+        }
+
         const include = [
             { model: StartupMetric, as: 'metrics' },
             {
                 model: Category,
                 as: 'industry',
-                where: category !== "All" ? { name: category } : {}
+                required: false
+            },
+            {
+                model: Category,
+                as: 'industries',
+                required: false
             },
             {
                 model: StartupPost,
@@ -217,10 +267,11 @@ exports.getAllStartups = async (req, res) => {
         const { count, rows: startups } = await Startup.findAndCountAll({
             where: whereClause,
             include,
-            order: [['metrics', 'trending_score', 'DESC']],
+            order: [['created_at', 'DESC']],
             limit,
             offset,
-            distinct: true
+            distinct: true,
+            subQuery: false // Required when joining M:M association with limit/offset and top-level filter
         });
 
         const signed = await Promise.all(startups.map(s => signStartupUrls(s.toJSON())));
@@ -246,6 +297,7 @@ exports.getTrending = async (req, res) => {
             include: [
                 { model: StartupMetric, as: 'metrics' },
                 { model: Category, as: 'industry' },
+                { model: Category, as: 'industries', required: false },
                 {
                     model: StartupPost,
                     as: 'posts',
@@ -310,6 +362,7 @@ exports.getStartupById = async (req, res) => {
             include: [
                 { model: StartupMetric, as: 'metrics' },
                 { model: Category, as: 'industry' },
+                { model: Category, as: 'industries', required: false },
                 {
                     model: StartupPost,
                     as: 'posts',
@@ -416,6 +469,7 @@ exports.getMyStartup = async (req, res) => {
             include: [
                 { model: StartupMetric, as: 'metrics' },
                 { model: Category, as: 'industry' },
+                { model: Category, as: 'industries', required: false },
                 {
                     model: StartupPost,
                     as: 'posts',
@@ -487,9 +541,12 @@ exports.updateStartup = async (req, res) => {
         }
 
         const {
-            name, tagline, description, industry_id,
-            website_url, funding_stage, location, team_size, founded_year
+            name, tagline, description, industry_id, industry_ids,
+            website_url, funding_stage, location, team_size, founded_year,
+            linkedin_url, twitter_url, instagram_url, facebook_url
         } = req.body;
+
+        console.log('Update Startup Request Body:', req.body);
 
         if (name !== undefined) startup.name = name;
         if (tagline !== undefined) startup.tagline = tagline;
@@ -500,6 +557,20 @@ exports.updateStartup = async (req, res) => {
         if (location !== undefined) startup.location = location || null;
         if (team_size !== undefined) startup.team_size = parseInt(team_size, 10) || null;
         if (founded_year !== undefined) startup.founded_year = parseInt(founded_year, 10) || null;
+        if (linkedin_url !== undefined) startup.linkedin_url = linkedin_url || null;
+        if (twitter_url !== undefined) startup.twitter_url = twitter_url || null;
+        if (instagram_url !== undefined) startup.instagram_url = instagram_url || null;
+        if (facebook_url !== undefined) startup.facebook_url = facebook_url || null;
+
+        // Update multiple industries if provided
+        if (industry_ids !== undefined) {
+            const idsToSet = Array.isArray(industry_ids) ? industry_ids : [industry_ids];
+            await startup.setIndustries(idsToSet);
+            // Also update legacy industry_id if needed
+            if (idsToSet.length > 0) {
+                startup.industry_id = idsToSet[0];
+            }
+        }
 
         // New logo upload
         const logoFile = req.files?.logo?.[0];
