@@ -51,13 +51,13 @@ module.exports = (sequelize, DataTypes) => {
             afterCreate: async (comment) => {
                 const { PostVote } = sequelize.models;
                 if (PostVote.recalculateAll) {
-                    await PostVote.recalculateAll(sequelize, comment.post_id);
+                    await PostVote.recalculateAll(comment.post_id);
                 }
             },
             afterDestroy: async (comment) => {
                 const { PostVote } = sequelize.models;
                 if (PostVote.recalculateAll) {
-                    await PostVote.recalculateAll(sequelize, comment.post_id);
+                    await PostVote.recalculateAll(comment.post_id);
                 }
             },
             afterUpdate: async (comment) => {
@@ -65,7 +65,7 @@ module.exports = (sequelize, DataTypes) => {
                 if (comment.changed('status')) {
                     const { PostVote } = sequelize.models;
                     if (PostVote.recalculateAll) {
-                        await PostVote.recalculateAll(sequelize, comment.post_id);
+                        await PostVote.recalculateAll(comment.post_id);
                     }
                 }
             }

@@ -58,7 +58,6 @@ exports.createCategory = async (req, res) => {
             return res.status(400).json({ error: 'Name is required' });
         }
 
-        // Handle file upload to S3 if a file is present
         if (req.file) {
             const fileName = `cat_${uuidv4()}`;
             imageUrl = await uploadImageToS3(
@@ -94,7 +93,6 @@ exports.updateCategory = async (req, res) => {
 
         let imageUrl = req.body.imageUrl || req.body.image_url || category.imageUrl;
 
-        // Handle new file upload to S3 if a file is provided
         if (req.file) {
             const fileName = `cat_${uuidv4()}`;
             imageUrl = await uploadImageToS3(
@@ -128,8 +126,7 @@ exports.deleteCategory = async (req, res) => {
             return res.status(404).json({ error: 'Category not found' });
         }
 
-        // Soft delete — mark as inactive rather than removing from DB
-        await category.update({ is_active: false });
+        await category.destroy();
 
         res.json({ message: 'Category deleted successfully' });
     } catch (error) {

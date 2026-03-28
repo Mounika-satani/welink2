@@ -91,6 +91,12 @@ exports.addComment = async (req, res) => {
             return res.status(401).json({ error: 'Authentication required' });
         }
 
+        const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/;
+        const phoneRegex = /(?:\+?\d{1,3}[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}/;
+        if (emailRegex.test(content) || phoneRegex.test(content)) {
+            return res.status(400).json({ error: 'Sharing personal contact information (emails, phone numbers) is not allowed.' });
+        }
+
         const post = await StartupPost.findByPk(post_id);
         if (!post || post.status !== 'APPROVED') {
             return res.status(404).json({ error: 'Post not found or not approved' });
@@ -172,6 +178,12 @@ exports.updateComment = async (req, res) => {
 
         if (!user_id) return res.status(401).json({ error: 'Authentication required' });
         if (!content?.trim()) return res.status(400).json({ error: 'Content is required' });
+
+        const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/;
+        const phoneRegex = /(?:\+?\d{1,3}[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}/;
+        if (emailRegex.test(content) || phoneRegex.test(content)) {
+            return res.status(400).json({ error: 'Sharing personal contact information (emails, phone numbers) is not allowed.' });
+        }
 
         const comment = await PostComment.findByPk(id);
         if (!comment) return res.status(404).json({ error: 'Comment not found' });
